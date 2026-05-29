@@ -1,81 +1,121 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from twilio.rest import Client
+import requests
 import os
+import json
 from dotenv import load_dotenv
 from datetime import datetime
 import pytz
 
+load_dotenv()
+
 app = FastAPI(
     docs_url=None,
-    redoc_url=None
+    redoc_url=None,
+    openapi_url=None
 )
-load_dotenv()
-# Allow your website to call this backend
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # After deploying, replace * with your actual website URL
-    allow_methods=["POST"],
+    allow_origins=["https://buildingxpert.netlify.app/"],
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Twilio credentials — stored safely as environment variables on Render
-TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID")
-TWILIO_AUTH_TOKEN  = os.environ.get("TWILIO_AUTH_TOKEN")
-TWILIO_WA_NUMBER   = "whatsapp:+14155238886"
+# -----------------------
+# META CONFIG
+# -----------------------
+ACCESS_TOKEN = os.getenv("WHATSAPP_TOKEN")
+PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER")
 
+GRAPH_URL = f"https://graph.facebook.com/v25.0/{PHONE_NUMBER_ID}/messages"
+
+# Multiple recipients
 RECIPIENTS = [
-    "whatsapp:+919710908050",
-    "whatsapp:+918838143348",
-    "whatsapp:+919360605902",
+    "919360605902",
+    "919710908050"
+    
 ]
 
-# Form data model
+# -----------------------
+# MODEL
+# -----------------------
 class EnquiryForm(BaseModel):
     name: str
     phone: str
     area: str = "Not specified"
     service: str
-    message: str = "No additional details"
+    message: str = "No message"
 
+# -----------------------
+# ROOT
+# -----------------------
+@app.get("/")
+def root():
+    return {
+        "status": "Meta WhatsApp Backend Running"
+    }
+
+# -----------------------
+# SEND ENQUIRY
+# -----------------------
 @app.post("/send-enquiry")
-async def send_enquiry(form: EnquiryForm):
-    if not form.name or not form.phone or not form.service:
-        raise HTTPException(status_code=400, detail="Name, phone, and service are required.")
+def send_enquiry(form: EnquiryForm):
 
-    # Format WhatsApp message
+    if not ACCESS_TOKEN:
+        raise HTTPException(
+            status_code=500,
+            detail="WHATSAPP_TOKEN missing in .env"
+        )
+
     ist = pytz.timezone("Asia/Kolkata")
     time_now = datetime.now(ist).strftime("%d %b %Y, %I:%M %p")
 
-    text = f"""🔔 New Enquiry — Building Xpert
+    message_text = f"""
+🔔 New Enquiry
 
 👤 Name: {form.name}
 📞 Phone: {form.phone}
 📍 Area: {form.area}
 🛠 Service: {form.service}
-💬 Details: {form.message}
+💬 Message: {form.message}
 
-⏰ {time_now}"""
+⏰ {time_now}
+"""
 
-    # Send to all recipients via Twilio
-    client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-    errors = []
+    headers = {
+        "Authorization": f"Bearer {ACCESS_TOKEN}",
+        "Content-Type": "application/json"
+    }
+
+    results = []
+
     for recipient in RECIPIENTS:
-        try:
-            client.messages.create(
-                from_=TWILIO_WA_NUMBER,
-                to=recipient,
-                body=text
-            )
-        except Exception as e:
-            errors.append(str(e))
 
-    if len(errors) == len(RECIPIENTS):
-        raise HTTPException(status_code=500, detail="Failed to send WhatsApp messages.")
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": recipient,
+            "type": "text",
+            "text": {
+                "body": message_text
+            }
+        }
 
-    return {"success": True, "message": "Enquiry sent successfully!"}
+        response = requests.post(
+            GRAPH_URL,
+            data=json.dumps(payload),
+            headers=headers
+        )
 
-@app.get("/")
-def root():
-    return {"status": "Building Xpert Backend Running ✅"}
+
+        results.append({
+            "recipient": recipient,
+            "status": response.status_code,
+            "response": response.json() if response.text else {}
+        })
+
+    return {
+        "success": True,
+        "results": results
+    }

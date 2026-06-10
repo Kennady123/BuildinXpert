@@ -1,14 +1,14 @@
+
+
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import requests
 import os
 import json
-from dotenv import load_dotenv
 from datetime import datetime
 import pytz
-
-load_dotenv()
 
 app = FastAPI(
     docs_url=None,
@@ -23,24 +23,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# -----------------------
-# META CONFIG
-# -----------------------
 ACCESS_TOKEN = os.getenv("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER")
-
 GRAPH_URL = f"https://graph.facebook.com/v25.0/{PHONE_NUMBER_ID}/messages"
 
-# Multiple recipients
 RECIPIENTS = [
     "919360605902",
     "919710908050"
-    
 ]
 
-# -----------------------
-# MODEL
-# -----------------------
 class EnquiryForm(BaseModel):
     name: str
     phone: str
@@ -48,41 +39,24 @@ class EnquiryForm(BaseModel):
     service: str
     message: str = "No message"
 
-# -----------------------
-# ROOT
-# -----------------------
 @app.get("/")
 def root():
     return {
-        "status": "Meta WhatsApp Backend Running"
+        "status": "Meta WhatsApp Backend Running",
+        "token_loaded": bool(ACCESS_TOKEN),
+        "phone_loaded": bool(PHONE_NUMBER_ID)
     }
 
-# -----------------------
-# SEND ENQUIRY
-# -----------------------
 @app.post("/send-enquiry")
 def send_enquiry(form: EnquiryForm):
-
     if not ACCESS_TOKEN:
         raise HTTPException(
             status_code=500,
-            detail="WHATSAPP_TOKEN missing in .env"
+            detail="WHATSAPP_TOKEN missing"
         )
 
     ist = pytz.timezone("Asia/Kolkata")
     time_now = datetime.now(ist).strftime("%d %b %Y, %I:%M %p")
-
-    message_text = f"""
-🔔 New Enquiry
-
-👤 Name: {form.name}
-📞 Phone: {form.phone}
-📍 Area: {form.area}
-🛠 Service: {form.service}
-💬 Message: {form.message}
-
-⏰ {time_now}
-"""
 
     headers = {
         "Authorization": f"Bearer {ACCESS_TOKEN}",
@@ -90,15 +64,27 @@ def send_enquiry(form: EnquiryForm):
     }
 
     results = []
-
     for recipient in RECIPIENTS:
-
         payload = {
             "messaging_product": "whatsapp",
             "to": recipient,
-            "type": "text",
-            "text": {
-                "body": message_text
+            "type": "template",
+            "template": {
+                "name": "enquiry_notification",
+                "language": {"code": "en_US"},
+                "components": [
+                    {
+                        "type": "body",
+                        "parameters": [
+                            {"type": "text", "parameter_name": "name", "text": form.name},
+                            {"type": "text", "parameter_name": "phone", "text": form.phone},
+                            {"type": "text", "parameter_name": "service", "text": form.service},
+                            {"type": "text", "parameter_name": "area", "text": form.area},
+                            {"type": "text", "parameter_name": "message", "text": form.message},
+                            {"type": "text", "parameter_name": "time", "text": time_now}
+                        ]
+                    }
+                ]
             }
         }
 
@@ -107,8 +93,6 @@ def send_enquiry(form: EnquiryForm):
             data=json.dumps(payload),
             headers=headers
         )
-
-
         results.append({
             "recipient": recipient,
             "status": response.status_code,
